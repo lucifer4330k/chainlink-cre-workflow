@@ -8,18 +8,23 @@ import { useState } from "react";
 
 function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x${string}` }) {
     const abi = parseAbi(CONTRACT_ABI);
+    const pollInterval = 3000; // Refresh every 3 seconds
 
     const { data: marketData } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "markets", args: [BigInt(marketId)],
+        query: { refetchInterval: pollInterval },
     });
     const { data: trueWager } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "wagers", args: [BigInt(marketId), userAddress, true],
+        query: { refetchInterval: pollInterval },
     });
     const { data: falseWager } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "wagers", args: [BigInt(marketId), userAddress, false],
+        query: { refetchInterval: pollInterval },
     });
     const { data: claimed } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "hasClaimed", args: [BigInt(marketId), userAddress],
+        query: { refetchInterval: pollInterval },
     });
 
     const { data: hash, isPending, writeContract } = useWriteContract();
@@ -30,8 +35,8 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
 
     const trueBet = trueWager as bigint | undefined;
     const falseBet = falseWager as bigint | undefined;
-    const hasTrueBet = trueBet && trueBet > 0n;
-    const hasFalseBet = falseBet && falseBet > 0n;
+    const hasTrueBet = trueBet !== undefined && trueBet > BigInt(0);
+    const hasFalseBet = falseBet !== undefined && falseBet > BigInt(0);
 
     // Skip markets where the user has no bets
     if (!hasTrueBet && !hasFalseBet) return null;
@@ -65,7 +70,10 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
     const statusIcons = { pending: "⏳", won: "🏆", lost: "💀" };
 
     return (
-        <div className="flex items-center justify-between bg-black/40 border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition-colors">
+        <div className={`flex items-center justify-between rounded-xl p-4 transition-colors border ${status === "won" ? "bg-green-950/20 border-green-800/50 hover:border-green-700" :
+                status === "lost" ? "bg-red-950/20 border-red-800/50 hover:border-red-700" :
+                    "bg-black/40 border-gray-800 hover:border-gray-700"
+            }`}>
             <div className="flex items-center gap-4 flex-1 min-w-0">
                 <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center font-bold text-gray-400 text-sm">
                     #{marketId}
@@ -91,17 +99,21 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
                 </span>
 
                 {claimed && (
-                    <span className="text-xs text-gray-500 font-medium px-2 py-1 bg-gray-800 rounded-lg">CLAIMED</span>
+                    <span className="text-xs text-gray-500 font-medium px-2 py-1 bg-gray-800 rounded-lg">✓ CLAIMED</span>
                 )}
 
                 {canClaim && (
                     <button
                         onClick={handleClaim}
                         disabled={isPending || isConfirming}
-                        className="text-xs font-bold px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-all shadow-[0_0_10px_rgba(37,99,235,0.4)] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                        className="text-xs font-bold px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-all shadow-[0_0_10px_rgba(37,99,235,0.4)] disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap animate-pulse"
                     >
                         {isPending || isConfirming ? "CLAIMING..." : "💰 CLAIM"}
                     </button>
+                )}
+
+                {resolved && status === "lost" && (
+                    <span className="text-xs text-red-500/70 font-medium px-2 py-1">No payout</span>
                 )}
             </div>
         </div>
@@ -110,13 +122,13 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
 
 export function PlayerHistory() {
     const { address, isConnected } = useAccount();
-    const [isOpen, setIsOpen] = useState(false);
+    const [isOpen, setIsOpen] = useState(true); // Default open so user sees bets immediately
 
     const { data: nextMarketId } = useReadContract({
         address: CONTRACT_ADDRESS,
         abi: parseAbi(CONTRACT_ABI),
         functionName: "nextMarketId",
-        query: { refetchInterval: 5000 },
+        query: { refetchInterval: 3000 },
     });
 
     const numMarkets = nextMarketId ? Number(nextMarketId) : 0;
@@ -141,7 +153,7 @@ export function PlayerHistory() {
             </button>
 
             {isOpen && (
-                <div className="mt-3 bg-gray-900/50 border border-gray-800 rounded-xl p-4 space-y-3 animate-in slide-in-from-top-2 duration-300">
+                <div className="mt-3 bg-gray-900/50 border border-gray-800 rounded-xl p-4 space-y-3">
                     <div className="flex items-center justify-between mb-2 px-1">
                         <p className="text-xs text-gray-500 font-mono">
                             Connected: {address.slice(0, 6)}...{address.slice(-4)}
@@ -156,9 +168,11 @@ export function PlayerHistory() {
                             <p className="text-gray-500">No markets exist yet.</p>
                         </div>
                     ) : (
-                        Array.from({ length: numMarkets }).map((_, i) => (
-                            <BetRow key={i} marketId={i} userAddress={address} />
-                        ))
+                        <>
+                            {Array.from({ length: numMarkets }).map((_, i) => (
+                                <BetRow key={i} marketId={i} userAddress={address} />
+                            ))}
+                        </>
                     )}
                 </div>
             )}

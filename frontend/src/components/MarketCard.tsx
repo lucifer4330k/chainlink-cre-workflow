@@ -14,6 +14,7 @@ export function MarketCard({ marketId }: { marketId: number }) {
         abi: parseAbi(CONTRACT_ABI),
         functionName: "markets",
         args: [BigInt(marketId)],
+        query: { refetchInterval: 3000 },
     });
 
     const { data: hash, isPending, writeContract } = useWriteContract();
