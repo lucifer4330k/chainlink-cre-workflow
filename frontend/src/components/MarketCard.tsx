@@ -35,7 +35,7 @@ export function MarketCard({ marketId }: { marketId: number }) {
     });
 
     const { data: hash, isPending, writeContract } = useWriteContract();
-    const { isLoading: isConfirming } = useWaitForTransactionReceipt({ hash });
+    const { isLoading: isConfirming, isSuccess: isTxSuccess } = useWaitForTransactionReceipt({ hash });
 
     if (!marketData) return <div className="animate-pulse bg-gray-800 h-64 rounded-xl"></div>;
 
@@ -190,18 +190,24 @@ export function MarketCard({ marketId }: { marketId: number }) {
                                             <p className="text-gray-400 text-xs mt-1">
                                                 You bet {formatEther(userBetAmount)} ETH on {userBetSide ? "REAL" : "FAKE"} — correct!
                                             </p>
+                                            <p className="text-green-300 font-bold text-lg mt-2">
+                                                Payout: {formatEther((userBetAmount * BigInt(3)) / BigInt(2))} ETH
+                                            </p>
+                                            <p className="text-green-600 text-xs">
+                                                ({formatEther(userBetAmount)} bet + {formatEther(userBetAmount / BigInt(2))} reward)
+                                            </p>
                                         </div>
-                                        {hasClaimed ? (
-                                            <div className="bg-gray-800 rounded-xl p-3 text-center">
-                                                <p className="text-gray-400 text-sm">✓ Winnings claimed successfully</p>
+                                        {hasClaimed || isTxSuccess ? (
+                                            <div className="bg-green-900/30 border border-green-700/30 rounded-xl p-3 text-center">
+                                                <p className="text-green-400 text-sm font-bold">✅ {formatEther((userBetAmount * BigInt(3)) / BigInt(2))} ETH claimed to your wallet!</p>
                                             </div>
                                         ) : (
                                             <button
                                                 onClick={handleClaim}
                                                 disabled={isPending || isConfirming}
-                                                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 py-3 rounded-lg font-bold text-white transition-all shadow-[0_0_20px_rgba(37,99,235,0.5)] animate-pulse disabled:opacity-50"
+                                                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 py-4 rounded-lg font-bold text-white transition-all shadow-[0_0_20px_rgba(37,99,235,0.5)] animate-pulse disabled:opacity-50"
                                             >
-                                                {isPending || isConfirming ? "CLAIMING..." : "💰 CLAIM WINNINGS"}
+                                                {isPending || isConfirming ? "CLAIMING..." : `💰 CLAIM ${formatEther((userBetAmount * BigInt(3)) / BigInt(2))} ETH`}
                                             </button>
                                         )}
                                     </div>
