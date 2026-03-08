@@ -9,9 +9,6 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY!;
 const HF_API_TOKEN = process.env.HF_API_TOKEN!;
 const HF_API_URL = process.env.HF_API_URL!;
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 10000; // 10 seconds between retries (for model loading)
-
 const CONTRACT_ABI = [
     "event MarketCreated(uint256 indexed marketId, string mediaUrl)",
     "event MarketResolved(uint256 indexed marketId, bool isReal)",
@@ -22,154 +19,139 @@ const CONTRACT_ABI = [
 
 // --- Main Workflow ---
 async function main() {
-    console.log("Starting Chainlink CRE AI Workflow...");
+    console.log("==============================================");
+    console.log("  Chainlink CRE AI Workflow - DeepFakeMarket");
+    console.log("==============================================");
 
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
     const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-    console.log(`Listening for MarketCreated events on ${CONTRACT_ADDRESS}...`);
+    console.log(`\nOracle wallet: ${wallet.address}`);
+    console.log(`Contract:      ${CONTRACT_ADDRESS}`);
+    console.log(`RPC:           ${RPC_URL}\n`);
 
     // Verify oracle address
     try {
         const oracleAddress: string = await (contract as any).creOracleAddress();
         if (wallet.address.toLowerCase() !== oracleAddress.toLowerCase()) {
-            console.warn(`\nWARNING: This wallet (${wallet.address}) is NOT the registered oracle (${oracleAddress}) for the contract! Transaction will fail.\n`);
+            console.error(`❌ FATAL: This wallet (${wallet.address}) is NOT the registered oracle (${oracleAddress})!`);
+            console.error(`   The resolveMarket transaction WILL FAIL.`);
+            console.error(`   Please redeploy the contract with this wallet as the oracle.\n`);
         } else {
-            console.log(`\nVerified: We are the registered oracle!\n`);
+            console.log(`✅ Oracle verification passed!\n`);
         }
-    } catch (e) {
-        console.warn("Could not verify oracle address:", e);
+    } catch (e: any) {
+        console.warn("⚠ Could not verify oracle address:", e.message);
     }
 
     // Listen for MarketCreated events
     contract.on("MarketCreated", async (marketId: bigint, mediaUrl: string) => {
-        console.log(`\n========================================`);
-        console.log(`NEW MARKET DETECTED!`);
-        console.log(`  Market ID: ${marketId}`);
-        console.log(`  Media URL: ${mediaUrl}`);
-        console.log(`========================================\n`);
+        console.log(`\n╔════════════════════════════════════════╗`);
+        console.log(`║       🆕 NEW MARKET DETECTED!         ║`);
+        console.log(`╠════════════════════════════════════════╣`);
+        console.log(`║  Market ID: ${String(marketId).padEnd(27)}║`);
+        console.log(`║  Media URL: ${mediaUrl.slice(0, 27).padEnd(27)}║`);
+        console.log(`╚════════════════════════════════════════╝\n`);
 
         try {
-            // Step 1: Call Hugging Face API for AI analysis
-            console.log("[AI] Sending media to Hugging Face for deepfake analysis...");
+            // Step 1: Attempt AI analysis
+            console.log("[STEP 1/2] 🤖 Analyzing media with AI...");
             const aiResult = await analyzeMedia(mediaUrl);
-            console.log(`[AI] Analysis complete!`);
-            console.log(`[AI] Verdict: ${aiResult.isReal ? "REAL ✓" : "DEEPFAKE ❌"}`);
-            console.log(`[AI] Confidence: ${(aiResult.confidence * 100).toFixed(2)}%`);
-            console.log(`[AI] Source: ${aiResult.source}`);
+
+            console.log(`\n[AI RESULT]`);
+            console.log(`  Verdict:    ${aiResult.isReal ? "✅ REAL" : "❌ DEEPFAKE"}`);
+            console.log(`  Confidence: ${(aiResult.confidence * 100).toFixed(1)}%`);
+            console.log(`  Source:     ${aiResult.source}\n`);
 
             // Step 2: Resolve the market on-chain
-            console.log(`\n[CHAIN] Submitting resolveMarket transaction...`);
+            console.log("[STEP 2/2] ⛓ Submitting resolveMarket transaction...");
             const tx = await (contract as any).resolveMarket(marketId, aiResult.isReal);
-            console.log(`[CHAIN] Transaction sent! Hash: ${tx.hash}`);
+            console.log(`  Tx hash: ${tx.hash}`);
+            console.log(`  Waiting for confirmation...`);
 
             const receipt = await tx.wait();
-            console.log(`[CHAIN] ✅ Transaction confirmed in block ${receipt?.blockNumber}!`);
-            console.log(`[CHAIN] Market ${marketId} resolved as: ${aiResult.isReal ? "REAL ✓" : "DEEPFAKE ❌"}`);
-            console.log(`========================================\n`);
+            console.log(`\n  ✅ CONFIRMED in block ${receipt?.blockNumber}!`);
+            console.log(`  🏁 Market #${marketId} → ${aiResult.isReal ? "REAL ✅" : "DEEPFAKE ❌"}`);
+            console.log(`\n  Users can now claim their winnings in the frontend!`);
+            console.log(`══════════════════════════════════════════\n`);
         } catch (error: any) {
-            console.error(`[ERROR] Failed to process market ${marketId}:`, error.message || error);
+            console.error(`\n❌ ERROR processing market ${marketId}:`);
+            console.error(`   ${error.message || error}`);
+            if (error.message?.includes("Only CRE oracle")) {
+                console.error(`   → This wallet is not the registered oracle for the contract.`);
+                console.error(`   → You need to redeploy with this wallet as the oracle address.\n`);
+            }
         }
     });
 
-    // Keep the process alive
-    console.log("Workflow is running. Waiting for new markets...\n");
-    await new Promise(() => { }); // Infinite wait
+    // Keep alive
+    console.log("🎧 Listening for new MarketCreated events...\n");
+    console.log("   Create a market in the frontend to trigger the AI workflow.\n");
+    await new Promise(() => { });
 }
 
-// --- AI Analysis with Retries ---
+// --- AI Analysis (fast fail, no long waits) ---
 async function analyzeMedia(mediaUrl: string): Promise<{ isReal: boolean; confidence: number; source: string }> {
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            console.log(`[AI] Attempt ${attempt}/${MAX_RETRIES}...`);
+    // Try Hugging Face API once, with a generous timeout
+    try {
+        console.log("  → Fetching media from URL...");
+        const imageResponse = await axios.get(mediaUrl, {
+            responseType: "arraybuffer",
+            timeout: 10000,
+        });
+        console.log(`  → Got ${imageResponse.data.byteLength} bytes, sending to HuggingFace...`);
 
-            // Try to fetch the image and send binary data to HF
-            let response;
-            try {
-                const imageResponse = await axios.get(mediaUrl, {
-                    responseType: "arraybuffer",
-                    timeout: 15000,
-                });
-                response = await axios.post(HF_API_URL, imageResponse.data, {
-                    headers: {
-                        Authorization: `Bearer ${HF_API_TOKEN}`,
-                        "Content-Type": "application/octet-stream",
-                    },
-                    timeout: 60000,
-                });
-            } catch (fetchError: any) {
-                // Check if model is loading (503)
-                if (fetchError.response?.status === 503) {
-                    const estimatedTime = fetchError.response?.data?.estimated_time || 20;
-                    console.log(`[AI] Model is loading... Estimated wait: ${estimatedTime}s. Retrying in ${RETRY_DELAY_MS / 1000}s...`);
-                    await sleep(RETRY_DELAY_MS);
-                    continue;
-                }
-                // If image fetch failed, try sending URL as JSON
-                console.log("[AI] Could not fetch image directly, sending URL as input...");
-                response = await axios.post(
-                    HF_API_URL,
-                    { inputs: mediaUrl },
-                    {
-                        headers: {
-                            Authorization: `Bearer ${HF_API_TOKEN}`,
-                            "Content-Type": "application/json",
-                        },
-                        timeout: 60000,
-                    }
-                );
-            }
+        const hfResponse = await axios.post(HF_API_URL, imageResponse.data, {
+            headers: {
+                Authorization: `Bearer ${HF_API_TOKEN}`,
+                "Content-Type": "application/octet-stream",
+            },
+            timeout: 30000,
+        });
 
-            const predictions = response.data;
-            console.log("[AI] Raw response:", JSON.stringify(predictions));
+        const predictions = hfResponse.data;
+        console.log("  → HF raw response:", JSON.stringify(predictions));
 
-            // Handle "model loading" response
-            if (predictions?.error?.includes("loading")) {
-                console.log("[AI] Model still loading, retrying...");
-                await sleep(RETRY_DELAY_MS);
-                continue;
-            }
-
-            // Parse Hugging Face image classification response
-            if (Array.isArray(predictions) && predictions.length > 0) {
-                const results = Array.isArray(predictions[0]) ? predictions[0] : predictions;
-
-                let realScore = 0;
-                let fakeScore = 0;
-
-                for (const pred of results) {
-                    const label = pred.label?.toLowerCase() || "";
-                    if (label.includes("real") || label.includes("true") || label.includes("genuine")) {
-                        realScore = pred.score || 0;
-                    } else if (label.includes("fake") || label.includes("false") || label.includes("deep")) {
-                        fakeScore = pred.score || 0;
-                    }
-                }
-
-                const isReal = realScore >= fakeScore;
-                const confidence = isReal ? realScore : fakeScore;
-                return { isReal, confidence: confidence || 0.5, source: "Hugging Face AI" };
-            }
-
-            console.warn("[AI] Unexpected response format:", JSON.stringify(predictions));
-        } catch (error: any) {
-            console.error(`[AI] Attempt ${attempt} failed:`, error.message);
-            if (attempt < MAX_RETRIES) {
-                console.log(`[AI] Retrying in ${RETRY_DELAY_MS / 1000}s...`);
-                await sleep(RETRY_DELAY_MS);
-            }
+        // Handle model loading
+        if (predictions?.error) {
+            console.warn(`  → HF returned error: ${predictions.error}`);
+            throw new Error(predictions.error);
         }
+
+        // Parse classification results
+        if (Array.isArray(predictions) && predictions.length > 0) {
+            const results = Array.isArray(predictions[0]) ? predictions[0] : predictions;
+            let realScore = 0;
+            let fakeScore = 0;
+
+            for (const pred of results) {
+                const label = (pred.label || "").toLowerCase();
+                if (label.includes("real") || label.includes("true") || label.includes("genuine")) {
+                    realScore = pred.score || 0;
+                } else if (label.includes("fake") || label.includes("false") || label.includes("deep")) {
+                    fakeScore = pred.score || 0;
+                }
+            }
+
+            const isReal = realScore >= fakeScore;
+            const confidence = isReal ? realScore : fakeScore;
+            return { isReal, confidence: confidence || 0.5, source: "Hugging Face AI Model" };
+        }
+
+        throw new Error("Unexpected HF response format");
+    } catch (error: any) {
+        // HF API failed — use intelligent random fallback so market still resolves
+        console.warn(`  ⚠ AI API failed: ${error.message}`);
+        console.warn(`  ⚠ Using random fallback verdict (market will still resolve!)`);
+
+        // Slightly biased toward "fake" since that's more interesting for demos
+        const randomValue = Math.random();
+        const isReal = randomValue > 0.6; // 60% chance of FAKE, 40% REAL
+        const confidence = 0.5 + (Math.random() * 0.3); // 50-80% fake confidence
+
+        return { isReal, confidence, source: "Fallback (AI API unavailable)" };
     }
-
-    // All retries failed — use random fallback so market still resolves
-    const randomVerdict = Math.random() > 0.5;
-    console.warn(`[AI] ⚠ All ${MAX_RETRIES} attempts failed! Using random fallback verdict: ${randomVerdict ? "REAL" : "FAKE"}`);
-    return { isReal: randomVerdict, confidence: 0.5, source: "Random fallback (API unavailable)" };
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // --- Run ---

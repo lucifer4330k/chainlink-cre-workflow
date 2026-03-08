@@ -6,48 +6,34 @@ import { parseAbi, formatEther } from "viem";
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from "@/lib/contract";
 import { useState } from "react";
 
-function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x${string}` }) {
-    const abi = parseAbi(CONTRACT_ABI);
-    const pollInterval = 3000; // Refresh every 3 seconds
-
-    const { data: marketData } = useReadContract({
-        address: CONTRACT_ADDRESS, abi, functionName: "markets", args: [BigInt(marketId)],
-        query: { refetchInterval: pollInterval },
-    });
-    const { data: trueWager } = useReadContract({
-        address: CONTRACT_ADDRESS, abi, functionName: "wagers", args: [BigInt(marketId), userAddress, true],
-        query: { refetchInterval: pollInterval },
-    });
-    const { data: falseWager } = useReadContract({
-        address: CONTRACT_ADDRESS, abi, functionName: "wagers", args: [BigInt(marketId), userAddress, false],
-        query: { refetchInterval: pollInterval },
-    });
-    const { data: claimed } = useReadContract({
-        address: CONTRACT_ADDRESS, abi, functionName: "hasClaimed", args: [BigInt(marketId), userAddress],
-        query: { refetchInterval: pollInterval },
-    });
-
+function SingleBetRow({
+    marketId,
+    userAddress,
+    betSide,
+    mediaUrl,
+    resolved,
+    isReal,
+    betAmount,
+    claimed
+}: {
+    marketId: number;
+    userAddress: `0x${string}`;
+    betSide: boolean;
+    mediaUrl: string;
+    resolved: boolean;
+    isReal: boolean;
+    betAmount: bigint;
+    claimed: boolean;
+}) {
     const { data: hash, isPending, writeContract } = useWriteContract();
     const { isLoading: isConfirming } = useWaitForTransactionReceipt({ hash });
 
-    if (!marketData) return null;
-    const [mediaUrl, , , resolved, isReal] = marketData as [string, bigint, bigint, boolean, boolean];
-
-    const trueBet = trueWager as bigint | undefined;
-    const falseBet = falseWager as bigint | undefined;
-    const hasTrueBet = trueBet !== undefined && trueBet > BigInt(0);
-    const hasFalseBet = falseBet !== undefined && falseBet > BigInt(0);
-
-    // Skip markets where the user has no bets
-    if (!hasTrueBet && !hasFalseBet) return null;
-
-    const userBetReal = hasTrueBet;
-    const userBetAmount = userBetReal ? trueBet! : falseBet!;
-    const userBetSide = userBetReal ? "REAL" : "FAKE";
+    const sideLabel = betSide ? "REAL" : "FAKE";
 
     let status: "pending" | "won" | "lost" = "pending";
     if (resolved) {
-        status = (userBetReal && isReal) || (!userBetReal && !isReal) ? "won" : "lost";
+        // User wins if their bet side matches the AI verdict
+        status = betSide === isReal ? "won" : "lost";
     }
 
     const canClaim = resolved && status === "won" && !claimed;
@@ -66,7 +52,6 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
         won: "text-green-400 bg-green-900/30 border-green-700/50",
         lost: "text-red-400 bg-red-900/30 border-red-700/50",
     };
-
     const statusIcons = { pending: "⏳", won: "🏆", lost: "💀" };
 
     return (
@@ -83,11 +68,11 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
                         {mediaUrl.length > 40 ? mediaUrl.slice(0, 40) + "..." : mediaUrl}
                     </p>
                     <div className="flex items-center gap-2 mt-1">
-                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${userBetReal ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
-                            BET {userBetSide}
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${betSide ? 'bg-green-900/40 text-green-400' : 'bg-red-900/40 text-red-400'}`}>
+                            BET {sideLabel}
                         </span>
                         <span className="text-sm text-white font-mono">
-                            {formatEther(userBetAmount)} ETH
+                            {formatEther(betAmount)} ETH
                         </span>
                     </div>
                 </div>
@@ -120,9 +105,71 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
     );
 }
 
+function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x${string}` }) {
+    const abi = parseAbi(CONTRACT_ABI);
+    const pollInterval = 3000;
+
+    const { data: marketData } = useReadContract({
+        address: CONTRACT_ADDRESS, abi, functionName: "markets", args: [BigInt(marketId)],
+        query: { refetchInterval: pollInterval },
+    });
+    const { data: trueWager } = useReadContract({
+        address: CONTRACT_ADDRESS, abi, functionName: "wagers", args: [BigInt(marketId), userAddress, true],
+        query: { refetchInterval: pollInterval },
+    });
+    const { data: falseWager } = useReadContract({
+        address: CONTRACT_ADDRESS, abi, functionName: "wagers", args: [BigInt(marketId), userAddress, false],
+        query: { refetchInterval: pollInterval },
+    });
+    const { data: claimed } = useReadContract({
+        address: CONTRACT_ADDRESS, abi, functionName: "hasClaimed", args: [BigInt(marketId), userAddress],
+        query: { refetchInterval: pollInterval },
+    });
+
+    if (!marketData) return null;
+    const [mediaUrl, , , resolved, isReal] = marketData as [string, bigint, bigint, boolean, boolean];
+
+    const trueBet = (trueWager as bigint) || BigInt(0);
+    const falseBet = (falseWager as bigint) || BigInt(0);
+    const hasTrueBet = trueBet > BigInt(0);
+    const hasFalseBet = falseBet > BigInt(0);
+
+    if (!hasTrueBet && !hasFalseBet) return null;
+
+    // Show EACH bet side as a separate row
+    return (
+        <>
+            {hasTrueBet && (
+                <SingleBetRow
+                    marketId={marketId}
+                    userAddress={userAddress}
+                    betSide={true}
+                    mediaUrl={mediaUrl}
+                    resolved={resolved}
+                    isReal={isReal}
+                    betAmount={trueBet}
+                    claimed={claimed as boolean || false}
+                />
+            )}
+            {hasFalseBet && (
+                <SingleBetRow
+                    marketId={marketId}
+                    userAddress={userAddress}
+                    betSide={false}
+                    mediaUrl={mediaUrl}
+                    resolved={resolved}
+                    isReal={isReal}
+                    betAmount={falseBet}
+                    claimed={claimed as boolean || false}
+                />
+            )}
+        </>
+    );
+}
+
 export function PlayerHistory() {
     const { address, isConnected } = useAccount();
-    const [isOpen, setIsOpen] = useState(true); // Default open so user sees bets immediately
+    const [isOpen, setIsOpen] = useState(true);
 
     const { data: nextMarketId } = useReadContract({
         address: CONTRACT_ADDRESS,
@@ -165,14 +212,12 @@ export function PlayerHistory() {
 
                     {numMarkets === 0 ? (
                         <div className="text-center py-8">
-                            <p className="text-gray-500">No markets exist yet.</p>
+                            <p className="text-gray-500">No markets exist yet. Create one above!</p>
                         </div>
                     ) : (
-                        <>
-                            {Array.from({ length: numMarkets }).map((_, i) => (
-                                <BetRow key={i} marketId={i} userAddress={address} />
-                            ))}
-                        </>
+                        Array.from({ length: numMarkets }).map((_, i) => (
+                            <BetRow key={i} marketId={i} userAddress={address} />
+                        ))
                     )}
                 </div>
             )}
