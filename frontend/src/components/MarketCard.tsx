@@ -1,15 +1,19 @@
 "use client";
 
-import { useReadContract, useWriteContract, useWaitForTransactionReceipt, useAccount } from "wagmi";
+import { useReadContract, useWriteContract, useWaitForTransactionReceipt, useAccount, useBalance } from "wagmi";
 import { parseAbi, formatEther, parseEther } from "viem";
 import { CONTRACT_ADDRESS, CONTRACT_ABI } from "@/lib/contract";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export function MarketCard({ marketId }: { marketId: number }) {
     const [amount, setAmount] = useState("0.01");
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [claimSuccess, setClaimSuccess] = useState(false);
     const { address, isConnected } = useAccount();
     const abi = parseAbi(CONTRACT_ABI);
+
+    // Wallet balance
+    const { data: balanceData, refetch: refetchBalance } = useBalance({ address });
 
     const { data: marketData, refetch } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "markets",
@@ -17,7 +21,6 @@ export function MarketCard({ marketId }: { marketId: number }) {
         query: { refetchInterval: 3000 },
     });
 
-    // Check user's existing bets
     const { data: trueWager } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "wagers",
         args: [BigInt(marketId), address || "0x0000000000000000000000000000000000000000", true],
@@ -28,20 +31,33 @@ export function MarketCard({ marketId }: { marketId: number }) {
         args: [BigInt(marketId), address || "0x0000000000000000000000000000000000000000", false],
         query: { refetchInterval: 3000, enabled: !!address },
     });
-    const { data: claimed } = useReadContract({
+    const { data: claimedData, refetch: refetchClaimed } = useReadContract({
         address: CONTRACT_ADDRESS, abi, functionName: "hasClaimed",
         args: [BigInt(marketId), address || "0x0000000000000000000000000000000000000000"],
         query: { refetchInterval: 3000, enabled: !!address },
     });
 
-    const { data: hash, isPending, writeContract } = useWriteContract();
-    const { isLoading: isConfirming, isSuccess: isTxSuccess } = useWaitForTransactionReceipt({ hash });
+    // Separate hooks for bet and claim (so they don't interfere)
+    const { data: betHash, isPending: isBetting, writeContract: writeBet } = useWriteContract();
+    const { isLoading: isBetConfirming } = useWaitForTransactionReceipt({ hash: betHash });
+
+    const { data: claimHash, isPending: isClaiming, writeContract: writeClaim, error: claimError } = useWriteContract();
+    const { isLoading: isClaimConfirming, isSuccess: isClaimConfirmed } = useWaitForTransactionReceipt({ hash: claimHash });
+
+    // Show success notification when claim is confirmed
+    useEffect(() => {
+        if (isClaimConfirmed && !claimSuccess) {
+            setClaimSuccess(true);
+            refetchClaimed();
+            refetchBalance();
+            refetch();
+        }
+    }, [isClaimConfirmed]);
 
     if (!marketData) return <div className="animate-pulse bg-gray-800 h-64 rounded-xl"></div>;
 
     const [mediaUrl, totalTrue, totalFalse, resolved, isReal] = marketData as [string, bigint, bigint, boolean, boolean];
 
-    // User bet state
     const userTrueBet = (trueWager as bigint) || BigInt(0);
     const userFalseBet = (falseWager as bigint) || BigInt(0);
     const hasPlacedBet = userTrueBet > BigInt(0) || userFalseBet > BigInt(0);
@@ -49,28 +65,30 @@ export function MarketCard({ marketId }: { marketId: number }) {
     const userBetAmount = userTrueBet > BigInt(0) ? userTrueBet : userFalseBet;
     const userWon = resolved && hasPlacedBet && (userBetSide === isReal);
     const userLost = resolved && hasPlacedBet && (userBetSide !== isReal);
-    const hasClaimed = claimed as boolean || false;
+    const hasClaimed = claimedData as boolean || false;
+
+    // Calculate expected payout (150% of stake)
+    const expectedPayout = hasPlacedBet ? (userBetAmount * BigInt(3)) / BigInt(2) : BigInt(0);
 
     const handleBet = (guess: boolean) => {
-        writeContract({
+        writeBet({
             address: CONTRACT_ADDRESS,
             abi: parseAbi(CONTRACT_ABI),
             functionName: "placeWager",
             args: [BigInt(marketId), guess],
             value: parseEther(amount),
         }, {
-            onSuccess: () => { setTimeout(() => refetch(), 2000); }
+            onSuccess: () => { setTimeout(() => { refetch(); refetchBalance(); }, 2000); }
         });
     };
 
     const handleClaim = () => {
-        writeContract({
+        setClaimSuccess(false);
+        writeClaim({
             address: CONTRACT_ADDRESS,
             abi: parseAbi(CONTRACT_ABI),
             functionName: "claimWinnings",
             args: [BigInt(marketId)],
-        }, {
-            onSuccess: () => { setTimeout(() => refetch(), 2000); }
         });
     };
 
@@ -105,7 +123,6 @@ export function MarketCard({ marketId }: { marketId: number }) {
                 </div>
 
                 <div className="p-5 flex-1 flex flex-col">
-                    {/* Media Link */}
                     <a href={mediaUrl} target="_blank" rel="noopener noreferrer"
                         className="text-xs text-blue-400 hover:text-blue-300 truncate block mb-4 bg-blue-900/20 py-2 px-3 rounded-lg border border-blue-900/50"
                         title={mediaUrl}
@@ -125,11 +142,16 @@ export function MarketCard({ marketId }: { marketId: number }) {
                         </div>
                     </div>
 
+                    {/* Wallet balance */}
+                    {isConnected && balanceData && (
+                        <div className="text-xs text-gray-500 mb-3 font-mono bg-black/30 rounded-lg px-3 py-1.5 border border-gray-800">
+                            💳 Wallet: {parseFloat(formatEther(balanceData.value)).toFixed(4)} ETH
+                        </div>
+                    )}
+
                     {/* === BETTING / RESULT AREA === */}
                     {!resolved ? (
-                        // MARKET IS OPEN
                         hasPlacedBet ? (
-                            // User already placed a bet — show their bet and "waiting" state
                             <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 text-center">
                                 <p className="text-sm text-gray-400 mb-2">Your bet is placed!</p>
                                 <div className="flex items-center justify-center gap-2 mb-2">
@@ -141,7 +163,6 @@ export function MarketCard({ marketId }: { marketId: number }) {
                                 <p className="text-xs text-yellow-400 animate-pulse mt-2">⏳ Waiting for AI verdict...</p>
                             </div>
                         ) : (
-                            // User hasn't bet yet — show betting UI
                             <div className="space-y-3">
                                 {!isConnected ? (
                                     <p className="text-center text-gray-500 text-sm py-4">Connect wallet to place a bet</p>
@@ -149,80 +170,82 @@ export function MarketCard({ marketId }: { marketId: number }) {
                                     <>
                                         <div className="flex items-center space-x-2 bg-black border border-gray-800 p-1 rounded-lg">
                                             <span className="text-gray-500 pl-3 font-mono text-sm">ETH</span>
-                                            <input
-                                                type="number" step="0.01" value={amount}
+                                            <input type="number" step="0.01" value={amount}
                                                 onChange={(e) => setAmount(e.target.value)}
                                                 className="w-full bg-transparent text-white focus:outline-none py-2 font-mono"
                                             />
                                         </div>
                                         <div className="grid grid-cols-2 gap-3">
-                                            <button
-                                                onClick={() => handleBet(true)}
-                                                disabled={isPending || isConfirming}
-                                                className="bg-green-600/10 hover:bg-green-600/20 border border-green-600/50 text-green-400 py-3 rounded-lg font-bold transition-all disabled:opacity-50"
-                                            >
+                                            <button onClick={() => handleBet(true)} disabled={isBetting || isBetConfirming}
+                                                className="bg-green-600/10 hover:bg-green-600/20 border border-green-600/50 text-green-400 py-3 rounded-lg font-bold transition-all disabled:opacity-50">
                                                 BET REAL ✓
                                             </button>
-                                            <button
-                                                onClick={() => handleBet(false)}
-                                                disabled={isPending || isConfirming}
-                                                className="bg-red-600/10 hover:bg-red-600/20 border border-red-600/50 text-red-400 py-3 rounded-lg font-bold transition-all disabled:opacity-50"
-                                            >
+                                            <button onClick={() => handleBet(false)} disabled={isBetting || isBetConfirming}
+                                                className="bg-red-600/10 hover:bg-red-600/20 border border-red-600/50 text-red-400 py-3 rounded-lg font-bold transition-all disabled:opacity-50">
                                                 BET FAKE ❌
                                             </button>
                                         </div>
-                                        {(isPending || isConfirming) && <p className="text-center text-xs text-blue-400 animate-pulse">Confirming transaction...</p>}
+                                        {(isBetting || isBetConfirming) && <p className="text-center text-xs text-blue-400 animate-pulse">Confirming bet transaction...</p>}
                                     </>
                                 )}
                             </div>
                         )
                     ) : (
-                        // MARKET IS RESOLVED
                         <div className="mt-2 pt-4 border-t border-gray-800">
                             {hasPlacedBet ? (
-                                // User had a bet
                                 userWon ? (
-                                    // USER WON
                                     <div className="space-y-3">
                                         <div className="bg-green-950/30 border border-green-700/50 rounded-xl p-4 text-center">
                                             <p className="text-2xl mb-1">🏆</p>
                                             <p className="text-green-400 font-black text-lg">YOU WON!</p>
                                             <p className="text-gray-400 text-xs mt-1">
-                                                You bet {formatEther(userBetAmount)} ETH on {userBetSide ? "REAL" : "FAKE"} — correct!
+                                                You bet {formatEther(userBetAmount)} ETH on {userBetSide ? "REAL" : "FAKE"}
                                             </p>
-                                            <p className="text-green-300 font-bold text-lg mt-2">
-                                                Payout: {formatEther((userBetAmount * BigInt(3)) / BigInt(2))} ETH
-                                            </p>
-                                            <p className="text-green-600 text-xs">
-                                                ({formatEther(userBetAmount)} bet + {formatEther(userBetAmount / BigInt(2))} reward)
+                                            <p className="text-green-300 text-sm font-bold mt-2">
+                                                🎁 Reward: {formatEther(expectedPayout)} ETH (150% of bet)
                                             </p>
                                         </div>
-                                        {hasClaimed || isTxSuccess ? (
-                                            <div className="bg-green-900/30 border border-green-700/30 rounded-xl p-3 text-center">
-                                                <p className="text-green-400 text-sm font-bold">✅ {formatEther((userBetAmount * BigInt(3)) / BigInt(2))} ETH claimed to your wallet!</p>
+
+                                        {/* CLAIM SUCCESS */}
+                                        {(hasClaimed || claimSuccess) && (
+                                            <div className="bg-green-900/50 border border-green-500 rounded-xl p-4 text-center animate-pulse">
+                                                <p className="text-green-400 font-black text-lg">✅ CLAIMED SUCCESSFULLY!</p>
+                                                <p className="text-white text-xl font-mono font-bold mt-1">
+                                                    +{formatEther(expectedPayout)} ETH
+                                                </p>
+                                                <p className="text-green-300 text-xs mt-1">Has been added to your wallet!</p>
                                             </div>
-                                        ) : (
-                                            <button
-                                                onClick={handleClaim}
-                                                disabled={isPending || isConfirming}
-                                                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 py-4 rounded-lg font-bold text-white transition-all shadow-[0_0_20px_rgba(37,99,235,0.5)] animate-pulse disabled:opacity-50"
-                                            >
-                                                {isPending || isConfirming ? "CLAIMING..." : `💰 CLAIM ${formatEther((userBetAmount * BigInt(3)) / BigInt(2))} ETH`}
-                                            </button>
+                                        )}
+
+                                        {/* CLAIM BUTTON */}
+                                        {!hasClaimed && !claimSuccess && (
+                                            <>
+                                                <button
+                                                    onClick={handleClaim}
+                                                    disabled={isClaiming || isClaimConfirming}
+                                                    className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 py-4 rounded-lg font-bold text-white text-lg transition-all shadow-[0_0_20px_rgba(37,99,235,0.5)] animate-pulse disabled:opacity-50"
+                                                >
+                                                    {isClaiming ? "⏳ SIGN IN METAMASK..." : isClaimConfirming ? "⛏ CONFIRMING TX..." : `💰 CLAIM ${formatEther(expectedPayout)} ETH`}
+                                                </button>
+                                                {claimError && (
+                                                    <p className="text-red-400 text-xs text-center mt-1">
+                                                        ❌ Claim failed: {claimError.message?.slice(0, 100)}
+                                                    </p>
+                                                )}
+                                            </>
                                         )}
                                     </div>
                                 ) : (
-                                    // USER LOST
                                     <div className="bg-red-950/20 border border-red-800/50 rounded-xl p-4 text-center">
                                         <p className="text-2xl mb-1">💀</p>
                                         <p className="text-red-400 font-black text-lg">YOU LOST</p>
                                         <p className="text-gray-500 text-xs mt-1">
                                             You bet {formatEther(userBetAmount)} ETH on {userBetSide ? "REAL" : "FAKE"} — wrong guess.
                                         </p>
+                                        <p className="text-red-500/70 text-xs mt-2">Your bet has been forfeited.</p>
                                     </div>
                                 )
                             ) : (
-                                // User didn't bet
                                 <div className="text-center py-4">
                                     <p className="text-gray-500 text-sm">You didn&apos;t place a bet on this market.</p>
                                 </div>
@@ -232,16 +255,12 @@ export function MarketCard({ marketId }: { marketId: number }) {
                 </div>
             </div>
 
-            {/* Fullscreen Modal */}
             {isFullscreen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4 cursor-zoom-out"
-                    onClick={() => setIsFullscreen(false)}
-                >
+                    onClick={() => setIsFullscreen(false)}>
                     <div className="relative max-w-7xl max-h-screen">
-                        <button
-                            className="absolute -top-12 right-0 text-white hover:text-gray-300 font-bold text-xl bg-gray-800/50 rounded-full w-10 h-10 flex items-center justify-center"
-                            onClick={(e) => { e.stopPropagation(); setIsFullscreen(false); }}
-                        >✕</button>
+                        <button className="absolute -top-12 right-0 text-white hover:text-gray-300 font-bold text-xl bg-gray-800/50 rounded-full w-10 h-10 flex items-center justify-center"
+                            onClick={(e) => { e.stopPropagation(); setIsFullscreen(false); }}>✕</button>
                         {isVideo ? (
                             <video src={mediaUrl} controls autoPlay className="max-w-full max-h-[85vh] rounded-lg shadow-2xl" onClick={e => e.stopPropagation()} />
                         ) : (
