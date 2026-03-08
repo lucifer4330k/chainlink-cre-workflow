@@ -22,6 +22,7 @@ contract DeepFakeMarket {
     event WagerPlaced(uint256 indexed marketId, address indexed user, bool guess, uint256 amount);
     event MarketResolved(uint256 indexed marketId, bool isReal);
     event WinningsClaimed(uint256 indexed marketId, address indexed user, uint256 amount);
+    event MarketsReset();
 
     modifier onlyOracle() {
         require(msg.sender == creOracleAddress, "Only CRE oracle can call this");
@@ -99,5 +100,11 @@ contract DeepFakeMarket {
         require(success, "Transfer failed");
 
         emit WinningsClaimed(_marketId, msg.sender, payout);
+    }
+
+    // Reset all markets (for demo/testing only)
+    function resetAll() external onlyOracle {
+        nextMarketId = 0;
+        emit MarketsReset();
     }
 }

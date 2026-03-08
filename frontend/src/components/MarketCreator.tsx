@@ -12,6 +12,9 @@ export function AdminPanel() {
     const { data: hash, isPending, writeContract } = useWriteContract();
     const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
 
+    const { data: resetHash, isPending: isResetting, writeContract: writeReset } = useWriteContract();
+    const { isLoading: isResetConfirming } = useWaitForTransactionReceipt({ hash: resetHash });
+
     const handleCreate = () => {
         if (!mediaUrl) return;
         writeContract({
@@ -19,6 +22,15 @@ export function AdminPanel() {
             abi: parseAbi(CONTRACT_ABI),
             functionName: "createMarket",
             args: [mediaUrl],
+        });
+    };
+
+    const handleReset = () => {
+        if (!confirm("Are you sure you want to clear ALL markets and transactions? This cannot be undone.")) return;
+        writeReset({
+            address: CONTRACT_ADDRESS,
+            abi: parseAbi(CONTRACT_ABI),
+            functionName: "resetAll",
         });
     };
 
@@ -106,6 +118,16 @@ export function AdminPanel() {
                         <p className="text-green-400 text-sm font-bold text-center">✓ Market created successfully! It will appear on the feed shortly.</p>
                     </div>
                 )}
+
+                <div className="mt-6 pt-4 border-t border-gray-800/50">
+                    <button
+                        onClick={handleReset}
+                        disabled={isResetting || isResetConfirming}
+                        className="w-full bg-red-950/30 hover:bg-red-900/40 border border-red-800/50 hover:border-red-600/50 text-red-400 font-bold py-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed tracking-wider text-sm"
+                    >
+                        {isResetting || isResetConfirming ? "RESETTING..." : "🗑 RESET ALL MARKETS & TRANSACTIONS"}
+                    </button>
+                </div>
             </div>
         </div>
     );
