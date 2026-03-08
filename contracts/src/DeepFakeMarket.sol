@@ -34,6 +34,9 @@ contract DeepFakeMarket {
         creOracleAddress = _creOracleAddress;
     }
 
+    // Allow contract to receive ETH as house funds for rewards
+    receive() external payable {}
+
     // Creates a new prediction pool
     function createMarket(string memory _mediaUrl) external {
         uint256 marketId = nextMarketId++;
@@ -77,7 +80,8 @@ contract DeepFakeMarket {
         emit MarketResolved(_marketId, _isReal);
     }
 
-    // Allows winners to claim their share of the pool
+    // Allows winners to claim: original bet + 50% reward
+    // Example: Bet 1 ETH and win → get 1.5 ETH back
     function claimWinnings(uint256 _marketId) external {
         require(_marketId < nextMarketId, "Market does not exist");
         Market storage market = markets[_marketId];
@@ -89,12 +93,13 @@ contract DeepFakeMarket {
 
         hasClaimed[_marketId][msg.sender] = true;
 
-        uint256 winningPool = market.isReal ? market.totalTrueStaked : market.totalFalseStaked;
-        uint256 losingPool = market.isReal ? market.totalFalseStaked : market.totalTrueStaked;
-        uint256 totalPool = winningPool + losingPool;
+        // Payout = original stake + 50% reward
+        uint256 payout = (userStake * 3) / 2;
 
-        // Calculate payout proportional to user's stake in the winning pool
-        uint256 payout = (userStake * totalPool) / winningPool;
+        // Cap payout to contract balance to prevent insolvency
+        if (payout > address(this).balance) {
+            payout = address(this).balance;
+        }
 
         (bool success, ) = msg.sender.call{value: payout}("");
         require(success, "Transfer failed");
@@ -106,5 +111,10 @@ contract DeepFakeMarket {
     function resetAll() external onlyOracle {
         nextMarketId = 0;
         emit MarketsReset();
+    }
+
+    // View contract balance (house funds)
+    function getHouseBalance() external view returns (uint256) {
+        return address(this).balance;
     }
 }

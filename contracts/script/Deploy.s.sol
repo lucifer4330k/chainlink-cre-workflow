@@ -13,8 +13,13 @@ contract DeployDeepFakeMarket is Script {
 
         DeepFakeMarket market = new DeepFakeMarket(oracleAddress);
 
+        // Fund the contract with 100 ETH as house reserve for reward payouts
+        (bool success, ) = address(market).call{value: 100 ether}("");
+        require(success, "Failed to fund contract");
+
         vm.stopBroadcast();
         
         console.log("DeepFakeMarket deployed at:", address(market));
+        console.log("House balance:", address(market).balance / 1 ether, "ETH");
     }
 }
