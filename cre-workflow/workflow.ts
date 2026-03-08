@@ -9,12 +9,9 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY!;
 const HF_API_TOKEN = process.env.HF_API_TOKEN!;
 const HF_API_URL = process.env.HF_API_URL!;
 
-// Betting window: wait this many seconds after market creation before resolving
-// This gives users time to place their bets
-const BETTING_WINDOW_SECONDS = 60;
-
 const CONTRACT_ABI = [
     "event MarketCreated(uint256 indexed marketId, string mediaUrl)",
+    "event WagerPlaced(uint256 indexed marketId, address indexed user, bool guess, uint256 amount)",
     "event MarketResolved(uint256 indexed marketId, bool isReal)",
     "function resolveMarket(uint256 _marketId, bool _isReal) external",
     "function creOracleAddress() view returns (address)",
@@ -33,15 +30,15 @@ async function main() {
 
     console.log(`\nOracle wallet: ${wallet.address}`);
     console.log(`Contract:      ${CONTRACT_ADDRESS}`);
-    console.log(`RPC:           ${RPC_URL}`);
-    console.log(`Betting window: ${BETTING_WINDOW_SECONDS} seconds\n`);
+    console.log(`RPC:           ${RPC_URL}\n`);
 
     // Verify oracle address
     try {
         const oracleAddress: string = await (contract as any).creOracleAddress();
         if (wallet.address.toLowerCase() !== oracleAddress.toLowerCase()) {
-            console.error(`❌ FATAL: This wallet (${wallet.address}) is NOT the registered oracle (${oracleAddress})!`);
-            console.error(`   The resolveMarket transaction WILL FAIL.\n`);
+            console.error(`❌ FATAL: This wallet is NOT the registered oracle!`);
+            console.error(`   Wallet: ${wallet.address}`);
+            console.error(`   Oracle: ${oracleAddress}\n`);
         } else {
             console.log(`✅ Oracle verification passed!\n`);
         }
@@ -49,27 +46,33 @@ async function main() {
         console.warn("⚠ Could not verify oracle address:", e.message);
     }
 
-    // Listen for MarketCreated events
-    contract.on("MarketCreated", async (marketId: bigint, mediaUrl: string) => {
+    // Log new markets
+    contract.on("MarketCreated", (marketId: bigint, mediaUrl: string) => {
+        console.log(`\n📢 Market #${marketId} created: ${mediaUrl}`);
+        console.log(`   Waiting for a user to place a bet...\n`);
+    });
+
+    // TRIGGER: Resolve AFTER a user places a bet
+    contract.on("WagerPlaced", async (marketId: bigint, user: string, guess: boolean, amount: bigint) => {
         console.log(`\n╔════════════════════════════════════════╗`);
-        console.log(`║       🆕 NEW MARKET DETECTED!         ║`);
+        console.log(`║     💰 BET PLACED — RESOLVING NOW!    ║`);
         console.log(`╠════════════════════════════════════════╣`);
         console.log(`║  Market ID: ${String(marketId).padEnd(27)}║`);
-        console.log(`║  Media URL: ${mediaUrl.slice(0, 27).padEnd(27)}║`);
+        console.log(`║  User:      ${user.slice(0, 27).padEnd(27)}║`);
+        console.log(`║  Bet:       ${(guess ? "REAL" : "FAKE").padEnd(27)}║`);
+        console.log(`║  Amount:    ${ethers.formatEther(amount).padEnd(24)} ETH║`);
         console.log(`╚════════════════════════════════════════╝\n`);
 
-        // --- BETTING WINDOW ---
-        console.log(`⏳ BETTING WINDOW OPEN for ${BETTING_WINDOW_SECONDS} seconds!`);
-        console.log(`   Users can now place their bets on REAL or FAKE.\n`);
-
-        for (let remaining = BETTING_WINDOW_SECONDS; remaining > 0; remaining -= 10) {
-            console.log(`   ⏱ ${remaining}s remaining for bets...`);
-            await sleep(Math.min(10000, remaining * 1000));
-        }
-
-        console.log(`\n🔒 BETTING WINDOW CLOSED! No more bets.\n`);
-
+        // Check if market is already resolved
         try {
+            const marketData = await (contract as any).markets(marketId);
+            const [mediaUrl, , , resolved] = marketData;
+
+            if (resolved) {
+                console.log(`⏭ Market #${marketId} is already resolved. Skipping.\n`);
+                return;
+            }
+
             // Step 1: AI Analysis
             console.log("[STEP 1/2] 🤖 Analyzing media with AI...");
             const aiResult = await analyzeMedia(mediaUrl);
@@ -87,7 +90,13 @@ async function main() {
             const receipt = await tx.wait();
             console.log(`\n  ✅ CONFIRMED in block ${receipt?.blockNumber}!`);
             console.log(`  🏁 Market #${marketId} → ${aiResult.isReal ? "REAL ✅" : "DEEPFAKE ❌"}`);
-            console.log(`\n  Winners can now claim their winnings!`);
+
+            // Tell the user their result
+            const userWon = guess === aiResult.isReal;
+            console.log(`\n  User ${user.slice(0, 10)}... bet ${guess ? "REAL" : "FAKE"} → ${userWon ? "🏆 WON!" : "💀 LOST"}`);
+            if (userWon) {
+                console.log(`  💰 They can now claim their winnings in the frontend!`);
+            }
             console.log(`══════════════════════════════════════════\n`);
         } catch (error: any) {
             console.error(`\n❌ ERROR processing market ${marketId}:`);
@@ -95,12 +104,12 @@ async function main() {
         }
     });
 
-    console.log("🎧 Listening for new MarketCreated events...\n");
-    console.log("   Create a market in the frontend to trigger the AI workflow.\n");
+    console.log("🎧 Listening for bets on all markets...\n");
+    console.log("   Flow: Create market → Place bet → AI resolves immediately → Claim winnings\n");
     await new Promise(() => { });
 }
 
-// --- AI Analysis (fast fail) ---
+// --- AI Analysis ---
 async function analyzeMedia(mediaUrl: string): Promise<{ isReal: boolean; confidence: number; source: string }> {
     try {
         console.log("  → Fetching media from URL...");
@@ -143,10 +152,6 @@ async function analyzeMedia(mediaUrl: string): Promise<{ isReal: boolean; confid
         const isReal = Math.random() > 0.6;
         return { isReal, confidence: 0.5 + Math.random() * 0.3, source: "Fallback (AI unavailable)" };
     }
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 main().catch((err) => {
