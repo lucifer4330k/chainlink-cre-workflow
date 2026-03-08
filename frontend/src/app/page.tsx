@@ -1,6 +1,7 @@
 import { AdminPanel } from "@/components/MarketCreator";
 import { MarketFeed } from "@/components/MarketFeed";
 import { PlayerHistory } from "@/components/PlayerHistory";
+import { ResolvedNotifier } from "@/components/ResolvedNotifier";
 
 export default function Home() {
   return (
@@ -18,6 +19,7 @@ export default function Home() {
         <AdminPanel />
         <PlayerHistory />
         <MarketFeed />
+        <ResolvedNotifier />
       </div>
     </>
   );

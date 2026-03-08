@@ -9,8 +9,12 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY!;
 const HF_API_TOKEN = process.env.HF_API_TOKEN!;
 const HF_API_URL = process.env.HF_API_URL!;
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 10000; // 10 seconds between retries (for model loading)
+
 const CONTRACT_ABI = [
     "event MarketCreated(uint256 indexed marketId, string mediaUrl)",
+    "event MarketResolved(uint256 indexed marketId, bool isReal)",
     "function resolveMarket(uint256 _marketId, bool _isReal) external",
     "function creOracleAddress() view returns (address)",
     "function markets(uint256) view returns (string, uint256, uint256, bool, bool)",
@@ -28,7 +32,7 @@ async function main() {
 
     // Verify oracle address
     try {
-        const oracleAddress: string = await contract.creOracleAddress();
+        const oracleAddress: string = await (contract as any).creOracleAddress();
         if (wallet.address.toLowerCase() !== oracleAddress.toLowerCase()) {
             console.warn(`\nWARNING: This wallet (${wallet.address}) is NOT the registered oracle (${oracleAddress}) for the contract! Transaction will fail.\n`);
         } else {
@@ -51,17 +55,18 @@ async function main() {
             console.log("[AI] Sending media to Hugging Face for deepfake analysis...");
             const aiResult = await analyzeMedia(mediaUrl);
             console.log(`[AI] Analysis complete!`);
-            console.log(`[AI] Verdict: ${aiResult.isReal ? "REAL" : "DEEPFAKE"}`);
+            console.log(`[AI] Verdict: ${aiResult.isReal ? "REAL ✓" : "DEEPFAKE ❌"}`);
             console.log(`[AI] Confidence: ${(aiResult.confidence * 100).toFixed(2)}%`);
+            console.log(`[AI] Source: ${aiResult.source}`);
 
             // Step 2: Resolve the market on-chain
             console.log(`\n[CHAIN] Submitting resolveMarket transaction...`);
-            const tx = await contract.resolveMarket(marketId, aiResult.isReal);
+            const tx = await (contract as any).resolveMarket(marketId, aiResult.isReal);
             console.log(`[CHAIN] Transaction sent! Hash: ${tx.hash}`);
 
             const receipt = await tx.wait();
-            console.log(`[CHAIN] Transaction confirmed in block ${receipt?.blockNumber}!`);
-            console.log(`[CHAIN] Market ${marketId} resolved as: ${aiResult.isReal ? "REAL" : "DEEPFAKE"}`);
+            console.log(`[CHAIN] ✅ Transaction confirmed in block ${receipt?.blockNumber}!`);
+            console.log(`[CHAIN] Market ${marketId} resolved as: ${aiResult.isReal ? "REAL ✓" : "DEEPFAKE ❌"}`);
             console.log(`========================================\n`);
         } catch (error: any) {
             console.error(`[ERROR] Failed to process market ${marketId}:`, error.message || error);
@@ -73,74 +78,98 @@ async function main() {
     await new Promise(() => { }); // Infinite wait
 }
 
-// --- AI Analysis ---
-async function analyzeMedia(mediaUrl: string): Promise<{ isReal: boolean; confidence: number }> {
-    try {
-        // Try to fetch the image and send binary data
-        let response;
+// --- AI Analysis with Retries ---
+async function analyzeMedia(mediaUrl: string): Promise<{ isReal: boolean; confidence: number; source: string }> {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const imageResponse = await axios.get(mediaUrl, {
-                responseType: "arraybuffer",
-                timeout: 15000
-            });
-            response = await axios.post(HF_API_URL, imageResponse.data, {
-                headers: {
-                    Authorization: `Bearer ${HF_API_TOKEN}`,
-                    "Content-Type": "application/octet-stream",
-                },
-                timeout: 30000,
-            });
-        } catch (fetchError) {
-            // If we can't fetch the image, send the URL as text input
-            console.log("[AI] Could not fetch image directly, sending URL...");
-            response = await axios.post(
-                HF_API_URL,
-                { inputs: mediaUrl },
-                {
+            console.log(`[AI] Attempt ${attempt}/${MAX_RETRIES}...`);
+
+            // Try to fetch the image and send binary data to HF
+            let response;
+            try {
+                const imageResponse = await axios.get(mediaUrl, {
+                    responseType: "arraybuffer",
+                    timeout: 15000,
+                });
+                response = await axios.post(HF_API_URL, imageResponse.data, {
                     headers: {
                         Authorization: `Bearer ${HF_API_TOKEN}`,
-                        "Content-Type": "application/json",
+                        "Content-Type": "application/octet-stream",
                     },
-                    timeout: 30000,
+                    timeout: 60000,
+                });
+            } catch (fetchError: any) {
+                // Check if model is loading (503)
+                if (fetchError.response?.status === 503) {
+                    const estimatedTime = fetchError.response?.data?.estimated_time || 20;
+                    console.log(`[AI] Model is loading... Estimated wait: ${estimatedTime}s. Retrying in ${RETRY_DELAY_MS / 1000}s...`);
+                    await sleep(RETRY_DELAY_MS);
+                    continue;
                 }
-            );
-        }
-
-        const predictions = response.data;
-        console.log("[AI] Raw predictions:", JSON.stringify(predictions));
-
-        // Parse Hugging Face image classification response
-        // Format: [[{label: "Real", score: 0.9}, {label: "Fake", score: 0.1}]]
-        if (Array.isArray(predictions) && predictions.length > 0) {
-            const results = Array.isArray(predictions[0]) ? predictions[0] : predictions;
-
-            let realScore = 0;
-            let fakeScore = 0;
-
-            for (const pred of results) {
-                const label = pred.label?.toLowerCase() || "";
-                if (label.includes("real") || label.includes("true") || label.includes("genuine")) {
-                    realScore = pred.score || 0;
-                } else if (label.includes("fake") || label.includes("false") || label.includes("deep")) {
-                    fakeScore = pred.score || 0;
-                }
+                // If image fetch failed, try sending URL as JSON
+                console.log("[AI] Could not fetch image directly, sending URL as input...");
+                response = await axios.post(
+                    HF_API_URL,
+                    { inputs: mediaUrl },
+                    {
+                        headers: {
+                            Authorization: `Bearer ${HF_API_TOKEN}`,
+                            "Content-Type": "application/json",
+                        },
+                        timeout: 60000,
+                    }
+                );
             }
 
-            const isReal = realScore >= fakeScore;
-            const confidence = isReal ? realScore : fakeScore;
+            const predictions = response.data;
+            console.log("[AI] Raw response:", JSON.stringify(predictions));
 
-            return { isReal, confidence: confidence || 0.5 };
+            // Handle "model loading" response
+            if (predictions?.error?.includes("loading")) {
+                console.log("[AI] Model still loading, retrying...");
+                await sleep(RETRY_DELAY_MS);
+                continue;
+            }
+
+            // Parse Hugging Face image classification response
+            if (Array.isArray(predictions) && predictions.length > 0) {
+                const results = Array.isArray(predictions[0]) ? predictions[0] : predictions;
+
+                let realScore = 0;
+                let fakeScore = 0;
+
+                for (const pred of results) {
+                    const label = pred.label?.toLowerCase() || "";
+                    if (label.includes("real") || label.includes("true") || label.includes("genuine")) {
+                        realScore = pred.score || 0;
+                    } else if (label.includes("fake") || label.includes("false") || label.includes("deep")) {
+                        fakeScore = pred.score || 0;
+                    }
+                }
+
+                const isReal = realScore >= fakeScore;
+                const confidence = isReal ? realScore : fakeScore;
+                return { isReal, confidence: confidence || 0.5, source: "Hugging Face AI" };
+            }
+
+            console.warn("[AI] Unexpected response format:", JSON.stringify(predictions));
+        } catch (error: any) {
+            console.error(`[AI] Attempt ${attempt} failed:`, error.message);
+            if (attempt < MAX_RETRIES) {
+                console.log(`[AI] Retrying in ${RETRY_DELAY_MS / 1000}s...`);
+                await sleep(RETRY_DELAY_MS);
+            }
         }
-
-        // Default fallback
-        console.warn("[AI] Unexpected response format, defaulting to REAL");
-        return { isReal: true, confidence: 0.5 };
-    } catch (error: any) {
-        console.error("[AI] Hugging Face API error:", error.message);
-        // On API failure, default to a safe verdict
-        console.warn("[AI] Defaulting to REAL due to API error");
-        return { isReal: true, confidence: 0.5 };
     }
+
+    // All retries failed — use random fallback so market still resolves
+    const randomVerdict = Math.random() > 0.5;
+    console.warn(`[AI] ⚠ All ${MAX_RETRIES} attempts failed! Using random fallback verdict: ${randomVerdict ? "REAL" : "FAKE"}`);
+    return { isReal: randomVerdict, confidence: 0.5, source: "Random fallback (API unavailable)" };
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // --- Run ---
