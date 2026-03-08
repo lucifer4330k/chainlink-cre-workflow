@@ -38,9 +38,12 @@ export function AdminPanel() {
 
             if (response.ok) {
                 const data = await response.json();
-                setMediaUrl(data.url);
+                // Use full URL so the CRE workflow can fetch the file
+                const fullUrl = `${window.location.origin}${data.url}`;
+                setMediaUrl(fullUrl);
             } else {
-                alert("Upload failed");
+                const errorData = await response.json().catch(() => ({}));
+                alert("Upload failed: " + (errorData.error || "Unknown error"));
             }
         } catch (error) {
             console.error("Upload error:", error);
