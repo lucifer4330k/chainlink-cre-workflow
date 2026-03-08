@@ -56,8 +56,8 @@ function SingleBetRow({
 
     return (
         <div className={`flex items-center justify-between rounded-xl p-4 transition-colors border ${status === "won" ? "bg-green-950/20 border-green-800/50 hover:border-green-700" :
-                status === "lost" ? "bg-red-950/20 border-red-800/50 hover:border-red-700" :
-                    "bg-black/40 border-gray-800 hover:border-gray-700"
+            status === "lost" ? "bg-red-950/20 border-red-800/50 hover:border-red-700" :
+                "bg-black/40 border-gray-800 hover:border-gray-700"
             }`}>
             <div className="flex items-center gap-4 flex-1 min-w-0">
                 <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-gray-800 flex items-center justify-center font-bold text-gray-400 text-sm">
@@ -170,15 +170,21 @@ function BetRow({ marketId, userAddress }: { marketId: number; userAddress: `0x$
 export function PlayerHistory() {
     const { address, isConnected } = useAccount();
     const [isOpen, setIsOpen] = useState(true);
+    const abi = parseAbi(CONTRACT_ABI);
 
     const { data: nextMarketId } = useReadContract({
-        address: CONTRACT_ADDRESS,
-        abi: parseAbi(CONTRACT_ABI),
-        functionName: "nextMarketId",
+        address: CONTRACT_ADDRESS, abi, functionName: "nextMarketId",
         query: { refetchInterval: 3000 },
     });
 
-    const numMarkets = nextMarketId ? Number(nextMarketId) : 0;
+    const { data: startMarketId } = useReadContract({
+        address: CONTRACT_ADDRESS, abi, functionName: "startMarketId",
+        query: { refetchInterval: 3000 },
+    });
+
+    const start = startMarketId ? Number(startMarketId) : 0;
+    const end = nextMarketId ? Number(nextMarketId) : 0;
+    const numVisible = end - start;
 
     if (!isConnected || !address) {
         return null;
@@ -206,17 +212,17 @@ export function PlayerHistory() {
                             Connected: {address.slice(0, 6)}...{address.slice(-4)}
                         </p>
                         <p className="text-xs text-gray-500">
-                            {numMarkets} market{numMarkets !== 1 ? 's' : ''} total
+                            {numVisible} market{numVisible !== 1 ? 's' : ''} active
                         </p>
                     </div>
 
-                    {numMarkets === 0 ? (
+                    {numVisible <= 0 ? (
                         <div className="text-center py-8">
                             <p className="text-gray-500">No markets exist yet. Create one above!</p>
                         </div>
                     ) : (
-                        Array.from({ length: numMarkets }).map((_, i) => (
-                            <BetRow key={i} marketId={i} userAddress={address} />
+                        Array.from({ length: numVisible }).map((_, i) => (
+                            <BetRow key={start + i} marketId={start + i} userAddress={address} />
                         ))
                     )}
                 </div>
@@ -224,3 +230,4 @@ export function PlayerHistory() {
         </div>
     );
 }
+
