@@ -1,5 +1,6 @@
 import { AdminPanel } from "@/components/MarketCreator";
 import { MarketFeed } from "@/components/MarketFeed";
+import { PlayerHistory } from "@/components/PlayerHistory";
 
 export default function Home() {
   return (
@@ -15,6 +16,7 @@ export default function Home() {
         </div>
 
         <AdminPanel />
+        <PlayerHistory />
         <MarketFeed />
       </div>
     </>
