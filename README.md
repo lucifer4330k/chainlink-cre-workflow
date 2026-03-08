@@ -54,4 +54,3 @@ npm run dev
 ```
 
 ---
-*Built for the Hackathon - Blending AI & Web3 with Chainlink!*
