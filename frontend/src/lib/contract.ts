@@ -1,4 +1,4 @@
-export const CONTRACT_ADDRESS = "0x959922bE3CAee4b8CD9a407cc3ac1C251C2007B1" as `0x${string}`;
+export const CONTRACT_ADDRESS = "0x9A9f2CCfdE556A7E9Ff0848998Aa4a0CFD8863AE" as `0x${string}`;
 
 export const CONTRACT_ABI = [
     "function createMarket(string memory _mediaUrl) external",
